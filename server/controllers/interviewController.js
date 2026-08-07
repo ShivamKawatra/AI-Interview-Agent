@@ -1,7 +1,6 @@
 const Session = require("../models/Session");
-const { chat, startInterview } = require("../services/geminiService");
-
-const { listAvailableModels } = require("../services/geminiService");
+const { chat, startInterview, listAvailableModels } = require("../services/geminiService");
+const AIUsage = require("../models/AIUsage");
 
 exports.interview = async (req, res) => {
   try {
@@ -19,7 +18,7 @@ exports.interview = async (req, res) => {
         return res.status(400).json({ error: "candidate is required to start interview" });
       }
 
-      const reply = await startInterview(candidate);
+      const reply = await startInterview(candidate, sessionId);
 
       session = await Session.create({
         sessionId,
@@ -97,6 +96,34 @@ exports.getModels = async (req, res) => {
     res.json(models);
   } catch (err) {
     console.error("getModels error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.exportTranscript = async (req, res) => {
+  try {
+    const session = await Session.findOne({ sessionId: req.params.sessionId });
+    if (!session) return res.status(404).json({ error: "Session not found" });
+    const filename = `transcript_${req.params.sessionId}.json`;
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Type", "application/json");
+    res.send(JSON.stringify(session, null, 2));
+  } catch (err) {
+    console.error("exportTranscript error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.exportAIUsage = async (req, res) => {
+  try {
+    const sessionId = req.params.sessionId;
+    const logs = await AIUsage.find({ sessionId }).sort({ createdAt: 1 }).lean();
+    const filename = `aiusage_${sessionId}.json`;
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Type", "application/json");
+    res.send(JSON.stringify(logs, null, 2));
+  } catch (err) {
+    console.error("exportAIUsage error:", err);
     res.status(500).json({ error: err.message });
   }
 };

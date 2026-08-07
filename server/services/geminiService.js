@@ -1,5 +1,6 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const curriculum = require("../data/curriculum.json");
+const AIUsage = require("../models/AIUsage");
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -89,7 +90,7 @@ async function chat(session, userMessage) {
     ...history,
   ];
 
-  const result = await sendWithFallback(historyForChat, userMessage);
+  const result = await sendWithFallback(historyForChat, userMessage, session.sessionId);
   const responseText = result.response.text();
 
   const isDone = responseText.includes("---DONE---");
@@ -124,7 +125,7 @@ async function chat(session, userMessage) {
   return { reply, isDone, feedback };
 }
 
-async function startInterview(candidate) {
+async function startInterview(candidate, sessionId = null) {
   const systemPrompt = buildSystemPrompt(candidate);
 
   const historyForChat = [
@@ -135,11 +136,11 @@ async function startInterview(candidate) {
     },
   ];
 
-  const result = await sendWithFallback(historyForChat, "Please begin the interview with a warm welcome and your first question.");
+  const result = await sendWithFallback(historyForChat, "Please begin the interview with a warm welcome and your first question.", sessionId);
   return result.response.text();
 }
 
-async function sendWithFallback(history, message) {
+async function sendWithFallback(history, message, sessionId = null) {
   const preferredFallbacks = process.env.GEMINI_FALLBACKS
     ? process.env.GEMINI_FALLBACKS.split(",").map((s) => s.trim())
     : [
@@ -190,13 +191,51 @@ async function sendWithFallback(history, message) {
       const modelObj = genAI.getGenerativeModel({ model: mName });
       // attach model name for logging
       modelObj.model = mName;
+      // record attempt
+      try {
+        await AIUsage.create({
+          sessionId,
+          modelName: mName,
+          promptHistory: history.map((h) => (h.parts || []).map((p) => p.text || "").join("\n")).join("\n---\n"),
+          userMessage: message,
+          status: "attempt",
+        });
+      } catch (logErr) {
+        console.warn("Failed to write AIUsage attempt log:", logErr);
+      }
+
       const res = await trySend(modelObj);
       // on success, set global model to this one for future calls
       model = modelObj;
       console.log(`Send succeeded with model: ${mName}`);
+      try {
+        const preview = (res && res.response && typeof res.response.text === "function") ? res.response.text().slice(0, 2000) : undefined;
+        await AIUsage.create({
+          sessionId,
+          modelName: mName,
+          promptHistory: history.map((h) => (h.parts || []).map((p) => p.text || "").join("\n")).join("\n---\n"),
+          userMessage: message,
+          responsePreview: preview,
+          status: "success",
+        });
+      } catch (logErr) {
+        console.warn("Failed to write AIUsage success log:", logErr);
+      }
       return res;
     } catch (err) {
       console.error(`Model ${mName} failed:`, err && err.message ? err.message : err);
+      try {
+        await AIUsage.create({
+          sessionId,
+          modelName: mName,
+          promptHistory: history.map((h) => (h.parts || []).map((p) => p.text || "").join("\n")).join("\n---\n"),
+          userMessage: message,
+          status: "error",
+          error: err && (err.message || JSON.stringify(err)),
+        });
+      } catch (logErr) {
+        console.warn("Failed to write AIUsage error log:", logErr);
+      }
       // if 503, try next model; if other errors like 404, try listing models for debugging
       if (err && err.status === 404) {
         try {

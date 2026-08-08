@@ -6,7 +6,8 @@ const interviewRoutes = require("./routes/interview");
 
 const app = express();
 
-app.use(cors({ origin: process.env.CLIENT_URL || "*" }));
+const allowedOrigin = process.env.CLIENT_URL?.replace(/\/+$/, "") || "*";
+app.use(cors({ origin: allowedOrigin, credentials: true }));
 app.use(express.json());
 app.use("/api", interviewRoutes);
 
